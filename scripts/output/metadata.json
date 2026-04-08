@@ -1,0 +1,23 @@
+{
+  "filename": "8A - 123 - Rampa x Chuala - Sesaralina (Original Mix) V2.mp3",
+  "duration": 381.545556,
+  "bitrate": 321,
+  "sampleRate": 44100,
+  "channels": 2,
+  "codec": "mp3",
+  "format": "mp3",
+  "loudness": {
+    "integratedLufs": -11.61,
+    "truePeakDbtp": 1.5,
+    "lra": 4.8
+  },
+  "transcode": {
+    "verdict": "good_quality",
+    "shelfRatio": 0.0712,
+    "cutoffHz": 20000
+  },
+  "snippet": {
+    "start": 200,
+    "duration": 30
+  }
+}

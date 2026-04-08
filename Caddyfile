@@ -1,0 +1,33 @@
+# TradeSync — Caddy reverse proxy
+#
+# TLS via Cloudflare Origin Certificate (mounted at /certs/).
+# All traffic arrives from Cloudflare (UFW blocks non-CF IPs).
+#
+# Cert files: /etc/caddy/certs/trademusic.app.pem and trademusic.app.key
+# Mounted into container at /certs/
+
+trademusic.app, www.trademusic.app {
+	tls /certs/trademusic.app.pem /certs/trademusic.app.key
+
+	reverse_proxy nextjs:3000 {
+		health_uri /api/health
+		health_interval 10s
+		health_timeout 5s
+	}
+}
+
+socket.trademusic.app {
+	tls /certs/trademusic.app.pem /certs/trademusic.app.key
+
+	reverse_proxy socket:3001
+}
+
+upload.trademusic.app {
+	tls /certs/trademusic.app.pem /certs/trademusic.app.key
+
+	request_body {
+		max_size 160MB
+	}
+
+	reverse_proxy tusd:8080
+}

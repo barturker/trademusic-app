@@ -1,0 +1,187 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: tradesync-postgres
+    restart: unless-stopped
+    expose:
+      - "5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: tradesync
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d tradesync"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    shm_size: 256mb
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_buffers=512MB"
+      - "-c"
+      - "effective_cache_size=1536MB"
+      - "-c"
+      - "work_mem=4MB"
+      - "-c"
+      - "maintenance_work_mem=128MB"
+      - "-c"
+      - "max_connections=50"
+      - "-c"
+      - "random_page_cost=1.1"
+      - "-c"
+      - "log_min_duration_statement=500"
+      - "-c"
+      - "autovacuum=on"
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: tradesync-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - /etc/caddy/certs:/certs:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      nextjs:
+        condition: service_healthy
+      tusd:
+        condition: service_healthy
+
+  tusd:
+    image: tusproject/tusd:v2
+    container_name: tradesync-tusd
+    restart: unless-stopped
+    user: "0:0"
+    expose:
+      - "8080"
+    volumes:
+      - uploads:/data/uploads
+    command:
+      - "-host=0.0.0.0"
+      - "-port=8080"
+      - "-base-path=/uploads/"
+      - "-upload-dir=/data/uploads"
+      - "-behind-proxy"
+      - "-hooks-http=http://nextjs:3000/api/webhooks/tusd"
+      - "-hooks-enabled-events=pre-create,post-finish,post-terminate"
+      - "-max-size=157286400"
+    depends_on:
+      nextjs:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/metrics"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  nextjs:
+    build:
+      context: .
+      args:
+        NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
+        NEXT_PUBLIC_SOCKET_URL: ${NEXT_PUBLIC_SOCKET_URL:-http://localhost:3001}
+        NEXT_PUBLIC_UPLOAD_URL: ${NEXT_PUBLIC_UPLOAD_URL:-http://localhost:8080/uploads}
+        NEXT_PUBLIC_CF_BEACON_TOKEN: ${NEXT_PUBLIC_CF_BEACON_TOKEN:-}
+    restart: unless-stopped
+    expose:
+      - "3000"
+    environment:
+      NODE_ENV: production
+      HOSTNAME: "0.0.0.0"
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/tradesync
+      SECRET_SALT: ${SECRET_SALT:?Set SECRET_SALT in .env}
+      ENCRYPTION_KEK: ${ENCRYPTION_KEK:?Set ENCRYPTION_KEK in .env}
+      SOCKET_INTERNAL_SECRET: ${SOCKET_INTERNAL_SECRET:?Set SOCKET_INTERNAL_SECRET in .env}
+      SOCKET_INTERNAL_URL: http://socket:3001/internal/emit
+      TUSD_HOOK_SECRET: ${TUSD_HOOK_SECRET:-}
+      HEALTH_SECRET: ${HEALTH_SECRET:-}
+      ADMIN_SECRET: ${ADMIN_SECRET:?Set ADMIN_SECRET in .env}
+      ADMIN_PATH: ${ADMIN_PATH:-d/overview}
+      IRON_SESSION_PASSWORD: ${IRON_SESSION_PASSWORD:?Set IRON_SESSION_PASSWORD in .env}
+      ADMIN_GATE_KEY: ${ADMIN_GATE_KEY:?Set ADMIN_GATE_KEY in .env}
+      UPLOAD_DIR: /app/data/uploads
+      ARTIFACTS_DIR: /app/data/artifacts
+      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
+      NEXT_PUBLIC_SOCKET_URL: ${NEXT_PUBLIC_SOCKET_URL:-http://localhost:3001}
+      NEXT_PUBLIC_UPLOAD_URL: ${NEXT_PUBLIC_UPLOAD_URL:-http://localhost:8080/uploads}
+    volumes:
+      - uploads:/app/data/uploads
+      - artifacts:/app/data/artifacts
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/api/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  socket:
+    build:
+      context: .
+    container_name: tradesync-socket
+    restart: unless-stopped
+    expose:
+      - "3001"
+    command: ["npx", "tsx", "scripts/socket-server.ts"]
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/tradesync
+      SECRET_SALT: ${SECRET_SALT:?Set SECRET_SALT in .env}
+      SOCKET_INTERNAL_SECRET: ${SOCKET_INTERNAL_SECRET:?Set SOCKET_INTERNAL_SECRET in .env}
+      SOCKET_PORT: "3001"
+      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+    container_name: tradesync-worker
+    restart: unless-stopped
+    command: ["npx", "tsx", "scripts/worker.ts"]
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=512m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/tradesync
+      SECRET_SALT: ${SECRET_SALT:?Set SECRET_SALT in .env}
+      ENCRYPTION_KEK: ${ENCRYPTION_KEK:?Set ENCRYPTION_KEK in .env}
+      SOCKET_INTERNAL_SECRET: ${SOCKET_INTERNAL_SECRET:?Set SOCKET_INTERNAL_SECRET in .env}
+      SOCKET_INTERNAL_URL: http://socket:3001/internal/emit
+      UPLOAD_DIR: /app/data/uploads
+      ARTIFACTS_DIR: /app/data/artifacts
+    volumes:
+      - uploads:/app/data/uploads
+      - artifacts:/app/data/artifacts
+      - ./data/assets:/app/data/assets:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+    driver: local
+  uploads:
+    driver: local
+  artifacts:
+    driver: local
+  caddy_data:
+    driver: local
+  caddy_config:
+    driver: local

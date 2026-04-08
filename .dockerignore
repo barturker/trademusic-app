@@ -1,0 +1,15 @@
+node_modules
+.next
+.git
+.gitignore
+.env.local
+.env*.local
+*.md
+!README.md
+.claude
+.vscode
+.idea
+data
+docker
+scripts/analyze-poc.ts
+vitest.config.ts
